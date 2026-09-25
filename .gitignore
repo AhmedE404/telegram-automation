@@ -1,0 +1,38 @@
+# Environment files (never commit secrets)
+.env
+.env.*
+!.env.example
+
+# Telegram session files & credentials
+session/
+*.session
+*.session-journal
+
+# Chrome user profiles & local browser data
+browser_profile/
+userData/
+
+# Python cache & build artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+build/
+dist/
+*.egg-info/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# IDE & Editor files
+.vscode/
+.idea/
+
+# Operating System files
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
