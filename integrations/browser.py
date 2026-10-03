@@ -32,6 +32,10 @@ def _make_options() -> ChromiumOptions:
     if settings.BROWSER_USE_PROFILE and settings.BROWSER_USER_DATA_DIR:
         co.set_user_data_path(settings.BROWSER_USER_DATA_DIR)
     co.set_load_mode("none")  # Return immediately on navigation so evaluation runs concurrently
+    # Anti-throttling flags: prevent Chrome from deprioritizing background tabs in multi-tab race mode
+    co.set_argument("--disable-background-timer-throttling")
+    co.set_argument("--disable-backgrounding-occluded-windows")
+    co.set_argument("--disable-renderer-backgrounding")
     if settings.BROWSER_HEADLESS:
         co.headless()
     return co
@@ -169,6 +173,99 @@ def poll_and_evaluate_js(
         time.sleep(poll_interval)
 
     return "TIMEOUT"
+
+
+def race_tabs_and_evaluate(
+    urls: list[str],
+    js_code: str,
+    timeout: float = 2.5,
+    poll_interval: float = 0.03,
+    settle_buffer: float = 0.25,
+) -> tuple[str, Optional[str]]:
+    """
+    Open up to len(urls) tabs in the same browser window concurrently and race them.
+    As soon as any tab triggers 'CLICKED':
+      - Brings the winning tab to the front.
+      - Closes other auxiliary tabs.
+      - Returns ('CLICKED', winning_url).
+    If all tabs are confirmed expired or without footers:
+      - Closes auxiliary tabs.
+      - Returns ('EXPIRED', None).
+    On timeout:
+      - Closes auxiliary tabs.
+      - Returns ('TIMEOUT', None).
+    """
+    if not urls:
+        return "EXPIRED", None
+
+    page = get_page()
+
+    # 1. Primary tab loads the first URL
+    primary_url = urls[0]
+    try:
+        page.get(primary_url, timeout=3.0)
+    except Exception:
+        pass
+
+    # 2. Auxiliary tabs load the remaining URLs in the batch
+    tab_map: list[tuple[str, Any]] = [(primary_url, page)]
+    for u in urls[1:]:
+        try:
+            tab = page.new_tab(u, new_window=False)
+            tab_map.append((u, tab))
+        except Exception as exc:
+            logger.warning("Could not open concurrent tab for %s: %s", u, exc)
+
+    start = time.time()
+    no_footer_map: dict[str, float] = {}
+    active_tabs = list(tab_map)
+
+    while time.time() - start < timeout and active_tabs:
+        for item in list(active_tabs):
+            url, tab = item
+            try:
+                res = tab.run_js(js_code)
+                if res == "CLICKED":
+                    # Winning tab! Bring to front and close losing auxiliary tabs
+                    try:
+                        page.activate_tab(tab.tab_id)
+                    except Exception:
+                        pass
+                    for other_url, other_tab in tab_map:
+                        if other_tab.tab_id != tab.tab_id and other_tab.tab_id != page.tab_id:
+                            try:
+                                other_tab.close()
+                            except Exception:
+                                pass
+                    return "CLICKED", url
+
+                if res in ("EXPIRED_PAGE", "NO_FOOTER"):
+                    now = time.time()
+                    if url not in no_footer_map:
+                        no_footer_map[url] = now
+                    elif now - no_footer_map[url] >= settle_buffer or res == "EXPIRED_PAGE":
+                        active_tabs.remove(item)
+                        if tab.tab_id != page.tab_id:
+                            try:
+                                tab.close()
+                            except Exception:
+                                pass
+                else:
+                    no_footer_map.pop(url, None)
+            except Exception:
+                pass
+
+        time.sleep(poll_interval)
+
+    # Clean auxiliary tabs if no tab claimed
+    for url, tab in tab_map:
+        if tab.tab_id != page.tab_id:
+            try:
+                tab.close()
+            except Exception:
+                pass
+
+    return ("TIMEOUT", None) if (time.time() - start >= timeout) else ("EXPIRED", None)
 
 
 def find_and_click_js(

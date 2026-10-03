@@ -32,39 +32,68 @@ _sniper_lock: asyncio.Lock = asyncio.Lock()
 
 def _process_urls_sync(urls: list[str]) -> bool:
     """
-    Synchronous worker: iterates through shuffled URLs, navigates
-    non-blocking, and claims the first valid link with an active button.
-    Exits immediately if expired or claimed.
+    Synchronous worker: processes URLs using bounded concurrent tabs
+    (or sequential if CONCURRENT_TABS=1), navigating non-blocking and
+    claiming the first valid link with an active button.
     """
     total = len(urls)
-    logger.info("[link_sniper] Starting batch of %d URL(s)...", total)
+    concurrency = settings.CONCURRENT_TABS
+    logger.info(
+        "[link_sniper] Starting batch of %d URL(s) (concurrency: %d tab(s))...",
+        total,
+        concurrency,
+    )
 
-    for index, url in enumerate(urls, start=1):
-        logger.info("[link_sniper] [%d/%d] Opening: %s", index, total, url)
+    # Chunk URLs into slices of size `concurrency`
+    chunks = [urls[i : i + concurrency] for i in range(0, total, concurrency)]
 
-        # 1. Non-blocking navigation
-        browser.safe_navigate(url, timeout=3.0)
-
-        # 2. Fast concurrent detection and click with early expired exit
-        status = browser.poll_and_evaluate_js(
-            CLAIM_AND_DETECT_JS,
-            timeout=BUTTON_POLL_TIMEOUT,
-            poll_interval=0.03,
-        )
-
-        if status == "CLICKED":
-            logger.info(
-                "[link_sniper] [%d/%d] Claimed: footer button clicked on %s",
-                index,
-                total,
-                url,
+    for chunk_idx, chunk in enumerate(chunks, start=1):
+        if len(chunk) == 1:
+            url = chunk[0]
+            logger.info("[link_sniper] Opening: %s", url)
+            browser.safe_navigate(url, timeout=3.0)
+            status = browser.poll_and_evaluate_js(
+                CLAIM_AND_DETECT_JS,
+                timeout=BUTTON_POLL_TIMEOUT,
+                poll_interval=0.03,
             )
-            return True
-
-        if status in ("EXPIRED_PAGE", "NO_FOOTER"):
-            logger.info("[link_sniper] [%d/%d] Link expired / no claim button — skipping to next.", index, total)
+            if status == "CLICKED":
+                logger.info("[link_sniper] Claimed: footer button clicked on %s", url)
+                return True
+            if status in ("EXPIRED_PAGE", "NO_FOOTER"):
+                logger.info("[link_sniper] Link expired / no claim button.")
+            else:
+                logger.info("[link_sniper] Timeout waiting for claim button.")
         else:
-            logger.info("[link_sniper] [%d/%d] Timeout waiting for claim button — checking next URL.", index, total)
+            logger.info(
+                "[link_sniper] [Batch %d/%d] Racing %d links concurrently across tabs...",
+                chunk_idx,
+                len(chunks),
+                len(chunk),
+            )
+            for idx, u in enumerate(chunk, start=1):
+                logger.info("[link_sniper]   -> Tab %d: %s", idx, u)
+
+            status, winning_url = browser.race_tabs_and_evaluate(
+                chunk,
+                CLAIM_AND_DETECT_JS,
+                timeout=BUTTON_POLL_TIMEOUT,
+                poll_interval=0.03,
+            )
+
+            if status == "CLICKED" and winning_url:
+                logger.info(
+                    "[link_sniper] Claimed: Won race and clicked claim button on %s",
+                    winning_url,
+                )
+                return True
+
+            logger.info(
+                "[link_sniper] [Batch %d/%d] Finished (%s) — moving to next batch.",
+                chunk_idx,
+                len(chunks),
+                status,
+            )
 
     logger.warning("[link_sniper] Exhausted all %d URL(s) without finding an active claim button.", total)
     return False

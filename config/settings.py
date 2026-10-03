@@ -83,6 +83,11 @@ BROWSER_USER_DATA_DIR: Optional[str] = (
 # Maximum time to poll each page for the claim button (in seconds)
 BUTTON_POLL_TIMEOUT: float = float(os.getenv("BUTTON_POLL_TIMEOUT", "1.2"))
 
+# Number of URLs to process concurrently in separate browser tabs (default: 3).
+#   1   — Sequential single-tab mode
+#   2-3 — Bounded parallel race mode (opens tabs in the same window, races to claim first ready link)
+CONCURRENT_TABS: int = max(1, int(os.getenv("CONCURRENT_TABS", "3")))
+
 # Hard deadline (seconds) for processing one message's entire URL batch.
 # If the browser hangs for any reason, the batch is abandoned after this time
 # and the script returns to listening — never blocked forever.
