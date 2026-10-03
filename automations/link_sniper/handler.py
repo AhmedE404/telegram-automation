@@ -18,7 +18,7 @@ from config import settings
 from core.logger import get_logger
 from integrations import browser
 from automations.link_sniper.config import (
-    TARGET_CHANNEL_ID,
+    TARGET_CHANNELS,
     URL_PATTERN,
     CLAIM_AND_DETECT_JS,
     BUTTON_POLL_TIMEOUT,
@@ -71,27 +71,39 @@ def _process_urls_sync(urls: list[str]) -> bool:
 
 
 async def on_startup(client: TelegramClient) -> None:
-    """Called once after the client connects — logs the monitored channel."""
-    try:
-        entity = await client.get_entity(TARGET_CHANNEL_ID)
-        title = (
-            getattr(entity, "title", None)
-            or getattr(entity, "username", None)
-            or str(TARGET_CHANNEL_ID)
-        )
-        mode = "TEST MODE" if settings.USE_TEST_CHANNEL else "PRODUCTION"
-        logger.info("link_sniper: Monitoring channel '%s' (%s) [%s]", title, TARGET_CHANNEL_ID, mode)
-    except Exception as exc:
-        logger.error("link_sniper: Could not resolve channel %s: %s", TARGET_CHANNEL_ID, exc)
+    """Called once after the client connects — logs all monitored channels."""
+    mode_label = (
+        "DUAL MODE (PRODUCTION + TEST)"
+        if settings.CHANNEL_MODE == "both"
+        else ("TEST MODE" if settings.CHANNEL_MODE == "test" else "PRODUCTION")
+    )
+    logger.info("link_sniper: Active channel mode: [%s]", mode_label)
+
+    for ch in TARGET_CHANNELS:
+        try:
+            entity = await client.get_entity(ch)
+            title = (
+                getattr(entity, "title", None)
+                or getattr(entity, "username", None)
+                or str(ch)
+            )
+            ch_type = "TEST CHANNEL" if str(ch) == str(settings.TEST_CHANNEL_ID) else "PRODUCTION"
+            logger.info("link_sniper: Monitoring channel '%s' (%s) [%s]", title, ch, ch_type)
+        except Exception as exc:
+            logger.error("link_sniper: Could not resolve channel %s: %s", ch, exc)
 
 
 def register(client: TelegramClient) -> None:
     """Register Telegram event handlers for the link sniper automation."""
 
-    @client.on(events.NewMessage(chats=TARGET_CHANNEL_ID))
+    @client.on(events.NewMessage(chats=TARGET_CHANNELS))
     async def _handle_new_message(event: events.NewMessage.Event) -> None:
         msg = event.message
         raw_text = msg.message or ""
+
+        # Identify which channel this event came from
+        is_test = str(event.chat_id) == str(settings.TEST_CHANNEL_ID)
+        origin_tag = "[Test Channel]" if is_test else "[Production]"
 
         # ── Safe media type detection (prevents crashes on any Telegram message type) ──
         media_tag = ""
@@ -116,24 +128,29 @@ def register(client: TelegramClient) -> None:
             snippet = snippet[:80] + "..."
 
         if media_tag and snippet:
-            logger.info("Channel event: %s Caption: %s", media_tag, snippet)
+            logger.info("Channel event %s: %s Caption: %s", origin_tag, media_tag, snippet)
         elif media_tag:
-            logger.info("Channel event: %s (no caption)", media_tag)
+            logger.info("Channel event %s: %s (no caption)", origin_tag, media_tag)
         elif snippet:
-            logger.info("Channel event: %s", snippet)
+            logger.info("Channel event %s: %s", origin_tag, snippet)
         else:
-            logger.info("Channel event: (Empty/Action)")
+            logger.info("Channel event %s: (Empty/Action)", origin_tag)
 
         # ── 1. Extract matching URLs (from text body, media caption, or embedded hyperlinks) ──
-        urls: list[str] = URL_PATTERN.findall(raw_text)
+        raw_matches: list[str] = URL_PATTERN.findall(raw_text)
 
         if msg.entities:
             for ent in msg.entities:
                 url_candidate = getattr(ent, "url", None)
                 if url_candidate:
-                    for matched_url in URL_PATTERN.findall(url_candidate):
-                        if matched_url not in urls:
-                            urls.append(matched_url)
+                    raw_matches.extend(URL_PATTERN.findall(url_candidate))
+
+        # Deduplicate while preserving order, and strip trailing sentence punctuation
+        urls: list[str] = []
+        for match in raw_matches:
+            cleaned = match.rstrip(").,;'\"")
+            if cleaned and cleaned not in urls:
+                urls.append(cleaned)
 
         if not urls:
             return
@@ -141,7 +158,8 @@ def register(client: TelegramClient) -> None:
         # ── 2. Shuffle — randomize order ──
         random.shuffle(urls)
         logger.info(
-            "[link_sniper] Received %d matching URL(s) — shuffled order.",
+            "[link_sniper] %s Received %d matching URL(s) — shuffled order.",
+            origin_tag,
             len(urls),
         )
 

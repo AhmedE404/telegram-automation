@@ -206,7 +206,10 @@ telegram-automation/
 
 ## Best Practices and Operational Guidelines
 
-- **Testing:** Verify automation logic on private test channels prior to production deployment.
-- **Channel Targeting:** Set `TARGET_CHANNEL` in `.env`. Supports private channel IDs with `-100` prefix (e.g., `-1001234567890`) or public usernames (e.g., `@channel_username`).
+- **Testing & Channel Modes:** Set `USE_TEST_CHANNEL` in `.env`:
+  - `false` (default): Listen to production channel only.
+  - `true`: Listen to private `TEST_CHANNEL_ID` only.
+  - `both`: Dual mode — listen to BOTH production and test channels simultaneously.
+- **Channel Targeting:** Set `LINK_SNIPER_TARGET_CHANNEL` in `.env`. Supports private channel IDs with `-100` prefix (e.g., `-1001234567890`) or public usernames (e.g., `@channel_username`).
 - **Bot Detection:** Maintain `BROWSER_HEADLESS=false` when interacting with Google services to minimize anti-automation flags.
 - **Data Persistence:** Do not remove the `session/` or `browser_profile/` directories while processes are active.

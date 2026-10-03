@@ -32,10 +32,19 @@ SESSION_NAME: str = os.path.normpath(os.getenv("SESSION_NAME", "session/telegram
 # Permanent private test channel (saved for developing and testing automations)
 TEST_CHANNEL_ID: str = os.getenv("TEST_CHANNEL_ID", "").strip()
 
-# When true, automations listen to TEST_CHANNEL_ID instead of production channels
-USE_TEST_CHANNEL: bool = (
-    os.getenv("USE_TEST_CHANNEL", "false").strip().lower() == "true"
-)
+# Channel monitoring mode:
+#   "production" (default) — listen to production channels only (USE_TEST_CHANNEL=false)
+#   "test"                 — listen to TEST_CHANNEL_ID only (USE_TEST_CHANNEL=true)
+#   "both"                 — listen to BOTH production and TEST_CHANNEL_ID simultaneously (USE_TEST_CHANNEL=both)
+_raw_channel_mode: str = os.getenv("USE_TEST_CHANNEL", "false").strip().lower()
+if _raw_channel_mode in ("both", "dual", "all"):
+    CHANNEL_MODE: str = "both"
+elif _raw_channel_mode in ("true", "1", "yes"):
+    CHANNEL_MODE: str = "test"
+else:
+    CHANNEL_MODE: str = "production"
+
+USE_TEST_CHANNEL: bool = CHANNEL_MODE == "test"
 
 # ── Application Environment ───────────────────────────────────────────────────
 # APP_MODE:

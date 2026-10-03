@@ -25,34 +25,42 @@ def _parse_target_channel(raw_val: str) -> Union[int, str]:
         return val
 
 
-def _resolve_target_channel() -> Union[int, str]:
+def _resolve_target_channels() -> list[Union[int, str]]:
     """
-    Resolve the monitored channel based on test mode setting.
-    If USE_TEST_CHANNEL is true, listens to the permanent TEST_CHANNEL_ID.
-    Otherwise, listens to LINK_SNIPER_TARGET_CHANNEL (or TARGET_CHANNEL).
+    Resolve the list of monitored channels based on settings.CHANNEL_MODE.
+    Supports:
+      - 'production' : Monitored channel is only the production channel (@samsshopofficial).
+      - 'test'       : Monitored channel is only the TEST_CHANNEL_ID.
+      - 'both'       : Listens to BOTH production channel and TEST_CHANNEL_ID simultaneously.
     """
-    if settings.USE_TEST_CHANNEL and settings.TEST_CHANNEL_ID:
-        return _parse_target_channel(settings.TEST_CHANNEL_ID)
-
-    prod = os.getenv(
+    prod_raw = os.getenv(
         "LINK_SNIPER_TARGET_CHANNEL",
         os.getenv("TARGET_CHANNEL", "@samsshopofficial"),
     ).strip()
-    if prod:
-        return _parse_target_channel(prod)
+    prod_ch = _parse_target_channel(prod_raw) if prod_raw else "@samsshopofficial"
+    test_ch = _parse_target_channel(settings.TEST_CHANNEL_ID) if settings.TEST_CHANNEL_ID else None
 
-    return "@samsshopofficial"
+    if settings.CHANNEL_MODE == "test":
+        return [test_ch] if test_ch else [prod_ch]
+
+    if settings.CHANNEL_MODE == "both":
+        channels: list[Union[int, str]] = [prod_ch]
+        if test_ch and test_ch not in channels:
+            channels.append(test_ch)
+        return channels
+
+    return [prod_ch]
 
 
-TARGET_CHANNEL: Union[int, str] = _resolve_target_channel()
-TARGET_CHANNEL_ID = TARGET_CHANNEL
+TARGET_CHANNELS: list[Union[int, str]] = _resolve_target_channels()
+TARGET_CHANNEL: Union[int, str] = TARGET_CHANNELS[0]
+TARGET_CHANNEL_ID: Union[int, str] = TARGET_CHANNEL
 
-# Matches Google subscription activation links regardless of subdomain or path prefix.
-# Covers known variants:
-#   https://serviceactivation.google.com/subscription/new/<token>
-#   https://one.google.com/u/3/activate-plan/subscription/new/<token>?...
+# Flexible pattern: matches Google subscription activation links across all domain variants,
+# subdomains, redirects, and path prefixes (e.g. serviceactivation.google.com, one.google.com,
+# serviceactivationgoogle.com, googlve.com, etc.) containing subscription/new/<token>.
 URL_PATTERN: re.Pattern = re.compile(
-    r"https://[a-zA-Z0-9.-]+\.google\.com/[^\s<>\"']*subscription/new/[^\s<>\"']+"
+    r"https?://[^\s<>\"']*subscription/new/[^\s<>\"']+"
 )
 
 # JS expression that resolves to the target claim button, or undefined/null if absent.
