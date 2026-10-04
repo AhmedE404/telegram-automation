@@ -32,6 +32,7 @@ def _make_options() -> ChromiumOptions:
     if settings.BROWSER_USE_PROFILE and settings.BROWSER_USER_DATA_DIR:
         co.set_user_data_path(settings.BROWSER_USER_DATA_DIR)
     co.set_load_mode("none")  # Return immediately on navigation so evaluation runs concurrently
+    co.set_timeouts(base=2, page_load=2, script=1)  # Never allow stuck network or scripts to block for 30s
     # Anti-throttling flags: prevent Chrome from deprioritizing background tabs in multi-tab race mode
     co.set_argument("--disable-background-timer-throttling")
     co.set_argument("--disable-backgrounding-occluded-windows")
@@ -122,7 +123,11 @@ def safe_navigate(url: str, timeout: float = 3.0) -> ChromiumPage:
     while True:
         try:
             page = get_page()
-            page.get(url, timeout=timeout)
+            # Non-blocking JS navigation prevents hanging on dead or slow servers
+            try:
+                page.run_js(f"window.location.href = {url!r}")
+            except Exception:
+                page.get(url, timeout=timeout)
             return page
         except Exception as exc:
             logger.warning("Navigation failed (%s) — recovering browser...", type(exc).__name__)
@@ -157,7 +162,7 @@ def poll_and_evaluate_js(
     while time.time() - start < timeout:
         try:
             page = get_page()
-            res = page.run_js(js_code)
+            res = page.run_js(js_code, timeout=0.15)
             if res in ("CLICKED", "EXPIRED_PAGE"):
                 return str(res)
             if res == "NO_FOOTER":
@@ -200,21 +205,21 @@ def race_tabs_and_evaluate(
 
     page = get_page()
 
-    # 1. Primary tab loads the first URL
-    primary_url = urls[0]
-    try:
-        page.get(primary_url, timeout=3.0)
-    except Exception:
-        pass
-
-    # 2. Auxiliary tabs load the remaining URLs in the batch
-    tab_map: list[tuple[str, Any]] = [(primary_url, page)]
+    # 1. Open all auxiliary tabs instantly in parallel without navigating yet (~50ms each)
+    tab_map: list[tuple[str, Any]] = [(urls[0], page)]
     for u in urls[1:]:
         try:
-            tab = page.new_tab(u, new_window=False)
+            tab = page.new_tab(new_window=False)
             tab_map.append((u, tab))
         except Exception as exc:
-            logger.warning("Could not open concurrent tab for %s: %s", u, exc)
+            logger.warning("Could not open concurrent tab: %s", exc)
+
+    # 2. Asynchronously dispatch navigation on all tabs via JavaScript without blocking Python
+    for u, tab in tab_map:
+        try:
+            tab.run_js(f"window.location.href = {u!r}")
+        except Exception as exc:
+            logger.warning("Navigation dispatch failed for %s: %s", u, exc)
 
     start = time.time()
     no_footer_map: dict[str, float] = {}
@@ -224,7 +229,7 @@ def race_tabs_and_evaluate(
         for item in list(active_tabs):
             url, tab = item
             try:
-                res = tab.run_js(js_code)
+                res = tab.run_js(js_code, timeout=0.15)
                 if res == "CLICKED":
                     # Winning tab! Bring to front and close losing auxiliary tabs
                     try:
