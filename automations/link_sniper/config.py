@@ -56,18 +56,19 @@ TARGET_CHANNELS: list[Union[int, str]] = _resolve_target_channels()
 TARGET_CHANNEL: Union[int, str] = TARGET_CHANNELS[0]
 TARGET_CHANNEL_ID: Union[int, str] = TARGET_CHANNEL
 
-# Flexible pattern: matches Google subscription activation links across all domain variants,
-# subdomains, redirects, and path prefixes (e.g. serviceactivation.google.com, one.google.com,
-# serviceactivationgoogle.com, googlve.com, etc.) containing subscription/new/<token>.
+# Flexible pattern: matches Google subscription links and redirector gateways across all variants:
+# 1. Direct and mirror links containing subscription/new/<token>
+# 2. Redirector gateway links (e.g. .top domains with /gimini/new/activation?token=...)
+# 3. Any activation gateway matching activation?token=
 URL_PATTERN: re.Pattern = re.compile(
-    r"https?://[^\s<>\"']*subscription/new/[^\s<>\"']+"
+    r"https?://[^\s<>\"']*(?:subscription/new/|\.top/[^\s<>\"']*|activation\?token=)[^\s<>\"']+"
 )
 
 # JS expression that resolves to the target claim button, or undefined/null if absent.
 # Optional chaining (?.) prevents errors when footer doesn't exist.
 FOOTER_BUTTON_JS: str = "document.querySelector('footer')?.querySelector('button')"
 
-# Unified JS snippet: language-agnostic evaluation of claim button and page structure
+# Unified JS snippet: language-agnostic evaluation of claim button, page structure, and redirectors
 CLAIM_AND_DETECT_JS: str = """
 return (() => {
     // 1. If claim button exists and is active, click immediately
@@ -79,12 +80,22 @@ return (() => {
         return 'CLICKED';
     }
 
-    // 2. If footer exists in DOM, wait for button to become enabled
+    // 2. If intermediate redirector page (e.g. .top / activation redirectors)
+    const mainEl = document.querySelector('main');
+    if (mainEl && mainEl.getAttribute('data-state') === 'error') {
+        return 'EXPIRED_PAGE';
+    }
+    if (!window.location.hostname.includes('google.com')) {
+        // Still on redirector gateway, wait for redirect to Google One
+        return 'PENDING';
+    }
+
+    // 3. If footer exists in DOM on Google page, wait for button to become enabled
     if (document.querySelector('footer')) {
         return 'PENDING';
     }
 
-    // 3. Page reached complete state without a footer
+    // 4. On Google domain and reached complete state without a footer
     if (document.readyState === 'complete') {
         return 'NO_FOOTER';
     }

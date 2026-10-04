@@ -80,8 +80,8 @@ BROWSER_USER_DATA_DIR: Optional[str] = (
     else None
 )
 
-# Maximum time to poll each page for the claim button (in seconds)
-BUTTON_POLL_TIMEOUT: float = float(os.getenv("BUTTON_POLL_TIMEOUT", "1.2"))
+# Maximum time to poll each page for the claim button (in seconds, default: 3.0s to allow redirectors like .top)
+BUTTON_POLL_TIMEOUT: float = float(os.getenv("BUTTON_POLL_TIMEOUT", "3.0"))
 
 # Number of URLs to process concurrently in separate browser tabs (default: 3).
 #   1   — Sequential single-tab mode
