@@ -141,7 +141,8 @@ def register(client: TelegramClient) -> None:
         elif msg.video:
             media_tag = "[Video]"
         elif msg.document:
-            media_tag = "[Document]"
+            doc_name = getattr(msg.file, "name", None)
+            media_tag = f"[Document: {doc_name}]" if doc_name else "[Document]"
         elif msg.voice:
             media_tag = "[Voice]"
         elif msg.audio:
@@ -173,6 +174,37 @@ def register(client: TelegramClient) -> None:
                 url_candidate = getattr(ent, "url", None)
                 if url_candidate:
                     raw_matches.extend(URL_PATTERN.findall(url_candidate))
+
+        # ── 1b. Extract matching URLs from attached text documents (e.g. .txt files) in memory ──
+        if msg.document:
+            file_name = (getattr(msg.file, "name", None) or "").lower()
+            file_ext = (getattr(msg.file, "ext", None) or "").lower()
+            mime_type = (getattr(msg.file, "mime_type", None) or "").lower()
+            file_size = getattr(msg.file, "size", 0) or 0
+
+            is_text_file = (
+                file_ext in (".txt", ".text", ".csv", ".log")
+                or file_name.endswith((".txt", ".text", ".csv", ".log"))
+                or mime_type.startswith("text/")
+                or mime_type in ("application/json", "application/x-empty")
+            )
+            # Enforce 5MB limit to prevent memory issues with massive unintended files
+            if is_text_file and file_size <= 5 * 1024 * 1024:
+                try:
+                    content_bytes = await msg.download_media(bytes)
+                    if content_bytes:
+                        file_text = content_bytes.decode("utf-8-sig", errors="ignore")
+                        doc_matches = URL_PATTERN.findall(file_text)
+                        if doc_matches:
+                            logger.info(
+                                "[link_sniper] %s Extracted %d URL(s) from attached document '%s'",
+                                origin_tag,
+                                len(doc_matches),
+                                file_name or "document.txt",
+                            )
+                            raw_matches.extend(doc_matches)
+                except Exception as exc:
+                    logger.warning("[link_sniper] Failed to read attached document: %s", exc)
 
         # Deduplicate while preserving order, and strip trailing sentence punctuation
         urls: list[str] = []
