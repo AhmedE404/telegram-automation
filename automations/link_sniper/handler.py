@@ -132,7 +132,14 @@ def register(client: TelegramClient) -> None:
 
         # Identify which channel this event came from
         is_test = str(event.chat_id) == str(settings.TEST_CHANNEL_ID)
-        origin_tag = "[Test Channel]" if is_test else "[Production]"
+        if is_test:
+            origin_tag = "[Test Channel]"
+        else:
+            chat_name = getattr(event.chat, "username", None) or getattr(event.chat, "title", None)
+            if chat_name:
+                origin_tag = f"[@{chat_name}]" if not str(chat_name).startswith("@") else f"[{chat_name}]"
+            else:
+                origin_tag = "[Production]"
 
         # ── Safe media type detection (prevents crashes on any Telegram message type) ──
         media_tag = ""

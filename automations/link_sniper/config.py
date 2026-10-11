@@ -9,47 +9,48 @@ from typing import Union
 from config import settings
 
 
-def _parse_target_channel(raw_val: str) -> Union[int, str]:
+def _parse_target_channels(raw_val: str) -> list[Union[int, str]]:
     """
-    Parse the target channel identifier from environment.
-    Supports:
-      - Integer channel IDs (e.g. -1001234567890 for private channels)
-      - Username strings (e.g. @channel_username for public channels)
+    Parse a comma-separated list of channel identifiers from environment.
+    Supports integer IDs and username strings (e.g. '@samsshopofficial, @samxalerts').
     """
-    val = raw_val.strip()
-    if not val:
-        return 0
-    try:
-        return int(val)
-    except ValueError:
-        return val
+    channels: list[Union[int, str]] = []
+    for part in raw_val.split(","):
+        val = part.strip()
+        if not val:
+            continue
+        try:
+            channels.append(int(val))
+        except ValueError:
+            channels.append(val)
+    return channels
 
 
 def _resolve_target_channels() -> list[Union[int, str]]:
     """
     Resolve the list of monitored channels based on settings.CHANNEL_MODE.
     Supports:
-      - 'production' : Monitored channel is only the production channel (@samsshopofficial).
+      - 'production' : Monitored channels are the production channels.
       - 'test'       : Monitored channel is only the TEST_CHANNEL_ID.
-      - 'both'       : Listens to BOTH production channel and TEST_CHANNEL_ID simultaneously.
+      - 'both'       : Listens to BOTH production channels and TEST_CHANNEL_ID simultaneously.
     """
     prod_raw = os.getenv(
         "LINK_SNIPER_TARGET_CHANNEL",
-        os.getenv("TARGET_CHANNEL", "@samsshopofficial"),
+        os.getenv("TARGET_CHANNEL", "@samsshopofficial, @samxalerts"),
     ).strip()
-    prod_ch = _parse_target_channel(prod_raw) if prod_raw else "@samsshopofficial"
-    test_ch = _parse_target_channel(settings.TEST_CHANNEL_ID) if settings.TEST_CHANNEL_ID else None
+    prod_channels = _parse_target_channels(prod_raw) if prod_raw else ["@samsshopofficial", "@samxalerts"]
+    test_channels = _parse_target_channels(settings.TEST_CHANNEL_ID) if settings.TEST_CHANNEL_ID else []
+    test_ch = test_channels[0] if test_channels else None
 
     if settings.CHANNEL_MODE == "test":
-        return [test_ch] if test_ch else [prod_ch]
+        return [test_ch] if test_ch else prod_channels
 
+    channels: list[Union[int, str]] = list(prod_channels)
     if settings.CHANNEL_MODE == "both":
-        channels: list[Union[int, str]] = [prod_ch]
         if test_ch and test_ch not in channels:
             channels.append(test_ch)
-        return channels
 
-    return [prod_ch]
+    return channels
 
 
 TARGET_CHANNELS: list[Union[int, str]] = _resolve_target_channels()
