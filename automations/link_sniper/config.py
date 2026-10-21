@@ -57,12 +57,26 @@ TARGET_CHANNELS: list[Union[int, str]] = _resolve_target_channels()
 TARGET_CHANNEL: Union[int, str] = TARGET_CHANNELS[0]
 TARGET_CHANNEL_ID: Union[int, str] = TARGET_CHANNEL
 
-# Flexible pattern: matches Google subscription links and redirector gateways across all variants:
+# Comprehensive smart pattern: matches all current and future Google subscription & redirector links:
 # 1. Direct and mirror links containing subscription/new/<token>
-# 2. Redirector gateway links (e.g. .top domains with /gimini/new/activation?token=...)
-# 3. Any activation gateway matching activation?token=
+# 2. Redirector gateway links (.top domains, activation-market, etc.)
+# 3. Fast redirect routes (/r/<token> with long tokens across any domain)
+# 4. Token & data gateway query parameters (e.g. ?token=..., ?data=...)
+# 5. Gemini / Google activation gateways
+# 6. Excludes internal Telegram links (t.me, etc.) to prevent false triggers
 URL_PATTERN: re.Pattern = re.compile(
-    r"https?://[^\s<>\"']*(?:subscription/new/|\.top/[^\s<>\"']*|activation\?token=)[^\s<>\"']+"
+    r"https?://(?!t\.me/|telegram\.me/|telegra\.ph/)[^\s<>\"']*(?:"
+    r"subscription/new/"
+    r"|\.top/[^\s<>\"']*"
+    r"|activation\?token="
+    r"|activation-market\.[^\s<>\"']*/"
+    r"|activation[^\s<>\"']*/r/"
+    r"|/r/[a-zA-Z0-9_\-]{10,}"
+    r"|(?:token|data)=[a-zA-Z0-9_\-%]{10,}"
+    r"|(?:gimini|gemini)[^\s<>\"']*(?:activation|subscription|plan)"
+    r"|reactivate\.php\?data="
+    r")[^\s<>\"']+",
+    re.IGNORECASE,
 )
 
 # JS expression that resolves to the target claim button, or undefined/null if absent.
